@@ -1,1 +1,2 @@
-opus_converter/__pycache__/
+*.pyc
+*/__pycache__

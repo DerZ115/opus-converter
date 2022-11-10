@@ -10,8 +10,12 @@ import pandas as pd
 opus_logger = logging.getLogger(__name__)
 opus_logger.addHandler(logging.NullHandler())
 
+# TODO Add support for multiple different spectral ranges
 
 class OpusParser(object):
+    """
+
+    """
     data: list | np.ndarray | pd.DataFrame
     params: list | pd.DataFrame
     metadata: bool | pd.DataFrame
@@ -26,21 +30,28 @@ class OpusParser(object):
         (1, 8): '<d'
     }
 
-    def __init__(self, files, signal="raman", metadata=False, _basepath=Path()):
+    def __init__(self, files, signal="raman", metadata=False, _basepath=None):
         opus_logger.info('Initializing OpusParser instance')
         self.files = files
         self.signal = signal
         self.store_metadata = metadata
         self._basepath = _basepath
         opus_logger.debug(f'Signal of type \'{signal}\' to be extracted')
-        opus_logger.debug('Metadata will be output into separate file:', metadata)
-        opus_logger.debug('Base path for output structure:', _basepath)
+        if metadata:
+            opus_logger.debug(f'Metadata will be output into separate file: {metadata}')
+        if _basepath:
+            opus_logger.debug(f'Base path for output structure: {_basepath}')
         # Prepare attributes
         self._bin_data = None
         self.params = []
         self.data = []
 
     def _validate_params(self):
+        """
+
+        Returns:
+
+        """
         opus_logger.debug('Validating parameters')
         if isinstance(self.files, str):
             self.files = [self.files]
@@ -74,7 +85,14 @@ class OpusParser(object):
         return pd.DataFrame(chunks)
 
     def _create_masks(self, chunks):
+        """
 
+        Args:
+            chunks ():
+
+        Returns:
+
+        """
         data_mask = chunks.block == 15
         param_mask = chunks.block == 31
         acquisition_mask = chunks.block == 32
@@ -91,6 +109,16 @@ class OpusParser(object):
         ]
 
     def _parse_param_block(self, offset, length, param_dict):
+        """
+
+        Args:
+            offset ():
+            length ():
+            param_dict ():
+
+        Returns:
+
+        """
         param_bin = self._bin_data[offset:offset + length * 4]
         i = 0
 
@@ -112,6 +140,11 @@ class OpusParser(object):
         return param_dict
 
     def _parse_param_blocks(self):
+        """
+
+        Returns:
+
+        """
         opus_logger.debug('Reading analysis parameters')
         params_tmp = {}
         for i, block in enumerate(self.param_chunks):
@@ -121,6 +154,11 @@ class OpusParser(object):
         self.params.append(params_tmp)
 
     def _parse_data_block(self):
+        """
+
+        Returns:
+
+        """
         opus_logger.debug('Reading data block')
         offset = self.data_chunk.offset
         length = self.data_chunk.length
@@ -139,12 +177,28 @@ class OpusParser(object):
         self.data.append(data_tmp)
 
     def _parse_data_single(self, data_bin):
+        """
+
+        Args:
+            data_bin ():
+
+        Returns:
+
+        """
         npt = self.params[-1]['NPT']
         if len(data_bin) > npt * 4:
             data_bin = data_bin[:4 * npt]
         return np.asarray(struct.unpack('<' + 'f' * npt, data_bin))
 
     def _parse_data_multiple(self, data_bin):
+        """
+
+        Args:
+            data_bin ():
+
+        Returns:
+
+        """
         header = struct.unpack('<' + 'I' * 4, data_bin[4:20])
 
         data = []
@@ -159,12 +213,19 @@ class OpusParser(object):
         return np.stack(data)
 
     def _clean_data(self):
+        """
+
+        Returns:
+
+        """
         opus_logger.debug('Cleaning up parsed data')
         self.params = pd.DataFrame(self.params)
         reps = [len(array) for array in self.data]
         self.params = self.params.loc[self.params.index.repeat(reps)]
-        files = [file.relative_to(self._basepath) for file in self.files]
-
+        if self._basepath:
+            files = [file.relative_to(self._basepath) for file in self.files]
+        else:
+            files = self.files
         # separate filename and parent directories
         self.params['parent'] = np.repeat([file.parent for file in files], reps)
         self.params['orig_file'] = np.repeat([file.name for file in files], reps)
@@ -193,6 +254,14 @@ class OpusParser(object):
 
     @staticmethod
     def clean_string(s):
+        """
+
+        Args:
+            s ():
+
+        Returns:
+
+        """
         s = re.sub(r'[^\w\s_]', '', s)
 
         s = re.sub(r'[\s._\-]+', '_', s)
@@ -200,6 +269,14 @@ class OpusParser(object):
         return s
 
     def _format_metadata(self, metadata):
+        """
+
+        Args:
+            metadata ():
+
+        Returns:
+
+        """
         opus_logger.debug('Applying metadata format')
         metadata.columns = ['parent', 'orig_file', 'spectrum_no', 'date',
                             'sample_name', 'sample_form', 'laser', 'power',
@@ -216,6 +293,17 @@ class OpusParser(object):
 
     @classmethod
     def from_dir(cls, path, signal='raman', metadata=False, recursive=False):
+        """
+
+        Args:
+            path ():
+            signal ():
+            metadata ():
+            recursive ():
+
+        Returns:
+
+        """
         opus_logger.info('Constructing OpusParser from directory path')
         opus_logger.debug(f'Received path: {path}')
         path = Path(path)
@@ -236,6 +324,11 @@ class OpusParser(object):
         return cls(files, signal=signal, metadata=metadata, _basepath=path)
 
     def parse(self):
+        """
+
+        Returns:
+
+        """
         opus_logger.info('Beginning parsing...')
         self._validate_params()
 
@@ -250,6 +343,16 @@ class OpusParser(object):
         self._clean_data()
 
     def export_data(self, path, single=True, **kwargs):
+        """
+
+        Args:
+            path ():
+            single ():
+            **kwargs ():
+
+        Returns:
+
+        """
         opus_logger.info(f'Writing data to {path}')
         path = Path(path)
 
@@ -308,6 +411,7 @@ if __name__ == '__main__':
     opus_logger.addHandler(fh)
     opus_logger.addHandler(ch)
 
-    parser = OpusParser.from_dir('/home/daniel/data_ecoli/', metadata=True, recursive=True)
+    parser = OpusParser.from_dir('../data/', metadata=False, recursive=False)
+    # parser = OpusParser("/home/daniel/opus-converter/data/230329_NP_fumarat.4")
     parser.parse()
-    parser.export_data('/home/daniel/data_ecoli_out')
+    parser.export_data('../out/')

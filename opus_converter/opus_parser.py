@@ -9,6 +9,7 @@ import pandas as pd
 
 class OpusParser(object):
     data: list | np.ndarray | pd.DataFrame
+    params: list | pd.DataFrame
     metadata: bool | pd.DataFrame
 
     channel_dict = {
@@ -24,7 +25,7 @@ class OpusParser(object):
     def __init__(self, files, signal="raman", metadata=False):
         self.files = files
         self.signal = signal
-        self.metadata = metadata
+        self.store_metadata = metadata
 
         # Prepare attributes
         self._bin_data = None
@@ -145,7 +146,7 @@ class OpusParser(object):
 
         index = pd.MultiIndex.from_arrays([np.repeat(self.files, reps),
                                            np.concatenate([np.arange(n) for n in reps])],
-                                          names=['file', 'spectrum'])
+                                          names=['orig_file', 'spectrum_no'])
         self.params.index = index
 
         # Calculate wavenumbers and add to data
@@ -157,10 +158,9 @@ class OpusParser(object):
         wns = np.linspace(wn_params[1], wn_params[2], wn_params[0])
         self.data = pd.DataFrame(np.row_stack(self.data), columns=wns, index=index)
 
-        if self.metadata:
-            # Collect metadata
-            self.metadata = self.params.loc[:, ['DAT', 'SNM', 'SFM', 'SRC', 'RLP', 'GRN', 'APT', 'INT', 'ASS']]
-            self.metadata = self._format_metadata(self.metadata)
+        # Collect metadata
+        self.metadata = self.params.loc[:, ['DAT', 'SNM', 'SFM', 'SRC', 'RLP', 'GRN', 'APT', 'INT', 'ASS']]
+        self.metadata = self._format_metadata(self.metadata)
 
     @staticmethod
     def clean_string(s):
@@ -222,11 +222,22 @@ class OpusParser(object):
             path.mkdir(parents=True, exist_ok=True)
 
             filename_counts = Counter()
+            filenames_out = []
             for row1, row2 in zip(self.data.iterrows(), self.metadata.itertuples()):
                 filename = '_'.join([row2.date.strftime('%y%m%d'), row2.sample_name, row2.sample_form])
+                filename_full = filename + f'_{filename_counts[filename]:03}.csv'
+                filenames_out.append(filename_full)
                 filename_counts[filename] += 1
 
-                row1[1].to_csv(path / (filename + f'_{filename_counts[filename]:03}.csv'), header=False, **kwargs)
+                row1[1].to_csv(path / filename_full, header=False, **kwargs)
+
+            if self.store_metadata:
+                # noinspection PyTypeChecker
+                self.metadata.insert(0, 'file', filenames_out)
+                self.metadata.reset_index(inplace=True)
+                self.metadata.drop(columns='spectrum_no', inplace=True)
+                self.metadata.set_index('file', inplace=True)
+                self.metadata.to_csv(path / 'metadata.csv')
 
 
 if __name__ == '__main__':

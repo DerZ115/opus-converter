@@ -22,10 +22,11 @@ class OpusParser(object):
         (1, 8): '<d'
     }
 
-    def __init__(self, files, signal="raman", metadata=False):
+    def __init__(self, files, signal="raman", metadata=False, _basepath=Path()):
         self.files = files
         self.signal = signal
         self.store_metadata = metadata
+        self._basepath = _basepath
 
         # Prepare attributes
         self._bin_data = None
@@ -143,11 +144,18 @@ class OpusParser(object):
         self.params = pd.DataFrame(self.params)
         reps = [len(array) for array in self.data]
         self.params = self.params.loc[self.params.index.repeat(reps)]
+        files = [file.relative_to(self._basepath) for file in self.files]
 
-        index = pd.MultiIndex.from_arrays([np.repeat(self.files, reps),
-                                           np.concatenate([np.arange(n) for n in reps])],
-                                          names=['orig_file', 'spectrum_no'])
-        self.params.index = index
+        # separate filename and parent directories
+        self.params['parent'] = np.repeat([file.parent for file in files], reps)
+        self.params['orig_file'] = np.repeat([file.name for file in files], reps)
+        self.params['spectrum_no'] = np.concatenate([np.arange(n) for n in reps])
+
+        # index = pd.MultiIndex.from_arrays([np.repeat(parents, reps),
+        #                                    np.repeat(self.files, reps),
+        #                                    np.concatenate([np.arange(n) for n in reps])],
+        #                                   names=['parent', 'orig_file', 'spectrum_no'])
+        # self.params.index = index
 
         # Calculate wavenumbers and add to data
         wn_params = self.params.loc[:, ['NPT', 'FXV', 'LXV']].to_records(index=False)
@@ -156,10 +164,12 @@ class OpusParser(object):
         wn_params = wn_params[0]
 
         wns = np.linspace(wn_params[1], wn_params[2], wn_params[0])
-        self.data = pd.DataFrame(np.row_stack(self.data), columns=wns, index=index)
+        self.data = pd.DataFrame(np.row_stack(self.data), columns=wns)
 
         # Collect metadata
-        self.metadata = self.params.loc[:, ['DAT', 'SNM', 'SFM', 'SRC', 'RLP', 'GRN', 'APT', 'INT', 'ASS']]
+        self.metadata = self.params.loc[:, ['parent', 'orig_file', 'spectrum_no',
+                                            'DAT', 'SNM', 'SFM', 'SRC', 'RLP',
+                                            'GRN', 'APT', 'INT', 'ASS']]
         self.metadata = self._format_metadata(self.metadata)
 
     @staticmethod
@@ -171,8 +181,9 @@ class OpusParser(object):
         return s
 
     def _format_metadata(self, metadata):
-        metadata.columns = ['date', 'sample_name', 'sample_form', 'laser', 'power', 'grating', 'aperture',
-                            'integration_time', 'co_additions']
+        metadata.columns = ['parent', 'orig_file', 'spectrum_no', 'date',
+                            'sample_name', 'sample_form', 'laser', 'power',
+                            'grating', 'aperture', 'integration_time', 'co_additions']
 
         metadata.date = pd.to_datetime(metadata.date)
         metadata.sample_name = [self.clean_string(s) for s in metadata.sample_name]
@@ -195,10 +206,10 @@ class OpusParser(object):
         opus_re = re.compile(r'.*\.\d+$')
         if recursive:
             files = [file for file in path.rglob('*.*[0-9]') if opus_re.match(str(file))]
+            # dirs = [file.parent for file in files]
         else:
             files = [file for file in path.glob('*.*[0-9]') if opus_re.match(str(file))]
-
-        return cls(files, signal=signal, metadata=metadata)
+        return cls(files, signal=signal, metadata=metadata, _basepath=path)
 
     def parse(self):
         self._validate_params()
@@ -214,33 +225,42 @@ class OpusParser(object):
 
     def export_data(self, path, single=True, **kwargs):
         path = Path(path)
-        if single:
-            if path.exists() and not path.is_dir():
-                raise NotADirectoryError(
-                    f'Path is expected to be a directory when `single=True`, received {str(path)} instead')
 
+        if path.exists() and not path.is_dir():
+            raise NotADirectoryError(
+                f'Path is expected to be a directory when `single=True`, received {str(path)} instead')
+        else:
             path.mkdir(parents=True, exist_ok=True)
+        for folder in self.metadata.parent.unique():
+            folder = path / folder
+            folder.mkdir(parents=True, exist_ok=True)
 
-            filename_counts = Counter()
-            filenames_out = []
+        filename_counts = Counter()
+        filenames_out = []
+        if single:
             for row1, row2 in zip(self.data.iterrows(), self.metadata.itertuples()):
                 filename = '_'.join([row2.date.strftime('%y%m%d'), row2.sample_name, row2.sample_form])
                 filename_full = filename + f'_{filename_counts[filename]:03}.csv'
                 filenames_out.append(filename_full)
                 filename_counts[filename] += 1
 
-                row1[1].to_csv(path / filename_full, header=False, **kwargs)
+                row1[1].to_csv(path / row2.parent / filename_full, header=False, **kwargs)
 
             if self.store_metadata:
                 # noinspection PyTypeChecker
                 self.metadata.insert(0, 'file', filenames_out)
-                self.metadata.reset_index(inplace=True)
+                # self.metadata.reset_index(inplace=True)
                 self.metadata.drop(columns='spectrum_no', inplace=True)
                 self.metadata.set_index('file', inplace=True)
-                self.metadata.to_csv(path / 'metadata.csv')
+
+                for parent, group in self.metadata.groupby('parent'):
+                    # noinspection PyTypeChecker
+                    group.to_csv(path / parent / 'metadata.csv')
+        # else:
+        #    for row1, row2 in zip(self.data.iterrows(), self.metadata.itertuples()):
 
 
 if __name__ == '__main__':
-    parser = OpusParser.from_dir('../data', metadata=True)
+    parser = OpusParser.from_dir('/home/daniel/ecoli_data', metadata=True, recursive=True)
     parser.parse()
-    parser.export_data('../out')
+    parser.export_data('/home/daniel/ecoli_data_out')

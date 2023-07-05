@@ -12,10 +12,8 @@ opus_logger.addHandler(logging.NullHandler())
 
 # TODO Add support for multiple different spectral ranges
 
-class OpusParser(object):
-    """
 
-    """
+class OpusParser(object):
     data: list | np.ndarray | pd.DataFrame
     params: list | pd.DataFrame
     metadata: bool | pd.DataFrame
@@ -47,11 +45,6 @@ class OpusParser(object):
         self.data = []
 
     def _validate_params(self):
-        """
-
-        Returns:
-
-        """
         opus_logger.debug('Validating parameters')
         if isinstance(self.files, str):
             self.files = [self.files]
@@ -85,14 +78,6 @@ class OpusParser(object):
         return pd.DataFrame(chunks)
 
     def _create_masks(self, chunks):
-        """
-
-        Args:
-            chunks ():
-
-        Returns:
-
-        """
         data_mask = chunks.block == 15
         param_mask = chunks.block == 31
         acquisition_mask = chunks.block == 32
@@ -109,16 +94,6 @@ class OpusParser(object):
         ]
 
     def _parse_param_block(self, offset, length, param_dict):
-        """
-
-        Args:
-            offset ():
-            length ():
-            param_dict ():
-
-        Returns:
-
-        """
         param_bin = self._bin_data[offset:offset + length * 4]
         i = 0
 
@@ -140,11 +115,6 @@ class OpusParser(object):
         return param_dict
 
     def _parse_param_blocks(self):
-        """
-
-        Returns:
-
-        """
         opus_logger.debug('Reading analysis parameters')
         params_tmp = {}
         for i, block in enumerate(self.param_chunks):
@@ -154,11 +124,6 @@ class OpusParser(object):
         self.params.append(params_tmp)
 
     def _parse_data_block(self):
-        """
-
-        Returns:
-
-        """
         opus_logger.debug('Reading data block')
         offset = self.data_chunk.offset
         length = self.data_chunk.length
@@ -177,28 +142,12 @@ class OpusParser(object):
         self.data.append(data_tmp)
 
     def _parse_data_single(self, data_bin):
-        """
-
-        Args:
-            data_bin ():
-
-        Returns:
-
-        """
         npt = self.params[-1]['NPT']
         if len(data_bin) > npt * 4:
             data_bin = data_bin[:4 * npt]
         return np.asarray(struct.unpack('<' + 'f' * npt, data_bin))
 
     def _parse_data_multiple(self, data_bin):
-        """
-
-        Args:
-            data_bin ():
-
-        Returns:
-
-        """
         header = struct.unpack('<' + 'I' * 4, data_bin[4:20])
 
         data = []
@@ -213,11 +162,6 @@ class OpusParser(object):
         return np.stack(data)
 
     def _clean_data(self):
-        """
-
-        Returns:
-
-        """
         opus_logger.debug('Cleaning up parsed data')
         self.params = pd.DataFrame(self.params)
         reps = [len(array) for array in self.data]
@@ -254,14 +198,6 @@ class OpusParser(object):
 
     @staticmethod
     def clean_string(s):
-        """
-
-        Args:
-            s ():
-
-        Returns:
-
-        """
         s = re.sub(r'[^\w\s_]', '', s)
 
         s = re.sub(r'[\s._\-]+', '_', s)
@@ -269,14 +205,6 @@ class OpusParser(object):
         return s
 
     def _format_metadata(self, metadata):
-        """
-
-        Args:
-            metadata ():
-
-        Returns:
-
-        """
         opus_logger.debug('Applying metadata format')
         metadata.columns = ['parent', 'orig_file', 'spectrum_no', 'date',
                             'sample_name', 'sample_form', 'laser', 'power',
@@ -293,17 +221,6 @@ class OpusParser(object):
 
     @classmethod
     def from_dir(cls, path, signal='raman', metadata=False, recursive=False):
-        """
-
-        Args:
-            path ():
-            signal ():
-            metadata ():
-            recursive ():
-
-        Returns:
-
-        """
         opus_logger.info('Constructing OpusParser from directory path')
         opus_logger.debug(f'Received path: {path}')
         path = Path(path)
@@ -324,11 +241,6 @@ class OpusParser(object):
         return cls(files, signal=signal, metadata=metadata, _basepath=path)
 
     def parse(self):
-        """
-
-        Returns:
-
-        """
         opus_logger.info('Beginning parsing...')
         self._validate_params()
 
@@ -343,16 +255,6 @@ class OpusParser(object):
         self._clean_data()
 
     def export_data(self, path, single=True, **kwargs):
-        """
-
-        Args:
-            path ():
-            single ():
-            **kwargs ():
-
-        Returns:
-
-        """
         opus_logger.info(f'Writing data to {path}')
         path = Path(path)
 

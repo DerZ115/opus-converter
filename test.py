@@ -1,14 +1,16 @@
 import os
-from opus_converter import read_opus
+from opus_converter import OpusParser
 
 files = sorted(os.listdir("./data"))
-for file in files:
-    print(file)
-    try:
-        data, metadata = read_opus("./data/" + file, metadata=True)
-    except AttributeError:
-        print("Parsing failed")    
-    else:
-        print(f"Loaded OPUS file with {data.shape} wavenumber points ranging from {data[0,0]} to {data[-1, 0]}.")
-        for key, val in metadata.items():
-            print(f"{key}: {val}")
+
+print(files)
+try:
+    parser = OpusParser.from_dir("./data/", metadata=True)
+    parser.parse()
+except AttributeError:
+    print("Parsing failed")
+else:
+    print(f"Loaded {len(parser.metadata)} OPUS files with {parser.data.shape[-1]} wavenumber points, "
+          f"ranging from {parser.data.columns[0]} to {parser.data.columns[-1]}.")
+    print("Metadata:")
+    print(parser.metadata.columns)

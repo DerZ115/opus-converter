@@ -1,5 +1,5 @@
 import os
-from opus_converter import OpusParser
+from opus_parser import OpusParser
 
 files = sorted(os.listdir("./data"))
 

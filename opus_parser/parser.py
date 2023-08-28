@@ -50,7 +50,9 @@ class OpusFile:
         self.misc_blocks = None
 
         self.bin_data = None
-        self.data = None
+        self.parameters = {}
+        self.wavenumbers = {}
+        self.data = {}
         self.metadata = None
 
     def parse(self):
@@ -68,14 +70,19 @@ class OpusFile:
         self.data_blocks = [block for block in blocks if isinstance(block, OpusDataBlock)]
         self.misc_blocks = [block for block in blocks if not isinstance(block, (OpusParameterBlock, OpusDataBlock))]
 
-        num_points = {}
         for block in self.parameter_blocks:
-            params = block.parse()
-            if "NPT" in params.keys():
-                num_points[(block.type, block.channel)] = params["NPT"]
+            param_name = parameter_block_types[block.type]
+            if param_name == "{Channel} Parameters":
+                param_name = param_name.format(Channel=block_channels[block.channel])
+
+            self.parameters[param_name] = block.parse()
 
         for block in self.data_blocks:
-            block.parse(num_points[(data2parameter_types[block.type], block.channel)])
+            data_name = block_channels[block.channel]
+            num_points = self.parameters[data_name + " Parameters"]["NPT"]
+            first_wn = self.parameters[data_name + " Parameters"]["FXV"]
+            last_wn = self.parameters[data_name + " Parameters"]["LXV"]
+            self.wavenumbers[data_name], self.data[data_name] = block.parse(num_points, first_wn, last_wn)
 
     def _validate_file(self):
         """Make sure the file exists, and has a valid Opus file extension"""
@@ -98,7 +105,7 @@ class OpusFile:
                     length: int,
                     block_type: int,
                     block_channel: int,
-                    block_text: int) -> Union['OpusBlock', None]:
+                    block_text: int) -> 'OpusBlock':
         if block_type in data_block_types.keys():
             return OpusDataBlock(offset,
                                  length,
@@ -120,6 +127,9 @@ class OpusFile:
             opus_logger.warning(f'Unknown block type: {block_type}')
             opus_logger.debug(block)
             return block
+
+    def parse_metadata(self):
+        pass
 
 
 class OpusHeader:
@@ -218,9 +228,14 @@ class OpusDataBlock(OpusBlock):
         super().__init__(offset, length, block_type, block_channel, block_text)
         self.data: Union[np.ndarray, None] = None
 
-    def parse(self, num_points: int) -> np.ndarray:
+    def parse(self,
+              num_points: int,
+              first_wn: float,
+              last_wn: float) -> tuple[np.ndarray, np.ndarray]:
         """Parse the data block"""
         opus_logger.debug('Reading data block')
+
+        wavenumbers = np.linspace(first_wn, last_wn, num_points)
 
         if len(self.bin_data) > (num_points + 1) * 4:
             opus_logger.debug('Found multiple spectra in file')
@@ -234,7 +249,7 @@ class OpusDataBlock(OpusBlock):
             data_bin = self.bin_data[:4 * num_points]
             self.data = np.asarray(struct.unpack('<' + 'f' * num_points, data_bin)).reshape(1, -1)
 
-        return self.data
+        return wavenumbers, self.data
 
 
 if __name__ == '__main__':

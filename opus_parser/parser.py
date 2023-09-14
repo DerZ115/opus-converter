@@ -6,29 +6,31 @@ from pathlib import Path
 from typing import Any, Union
 
 import numpy as np
+import pandas as pd
 
 opus_logger = logging.getLogger(__name__)
 opus_logger.addHandler(logging.NullHandler())
 
 parameter_block_types = {
-    48:  "Acquisition Parameters",
-    64:  "FT Parameters",
-    96:  "Optical Parameters",
-    160: "Sample Parameters",
-    31:  "{Channel} Parameters",
-    32:  "Instrument Parameters"
+    (16, 28): "Trace Parameters",
+    (31, 40):  "Raman Parameters",
+    (32, 0):   "Instrument Parameters",
+    (48, 0):   "Acquisition Parameters",
+    (64, 0):   "FT Parameters",
+    (96, 0):   "Optics Parameters",
+    (160, 0):  "Sample Parameters",
 }
+
 data_block_types = {
-    15: "{Channel} Data"
+    (15, 40):  "Raman Data",
 }
 
-data2parameter_types = {
-    15: 31
+misc_blocks = {
+    (0, 52, 0):  "Header",
+    (0, 0, 160): "Unknown",
 }
 
-block_channels = {
-    40: "Raman"
-}
+unused_blocks = [7, 11, 23, 27]
 
 field_types = {
     (0, 4): '<I',
@@ -44,45 +46,72 @@ class OpusFile:
         opus_logger.debug('Initializing OpusFile instance')
         opus_logger.debug(f'Received path: {path}')
         self.path = Path(path)
+        self.acquisition_mode = None
         self.header = None
         self.parameter_blocks = None
         self.data_blocks = None
         self.misc_blocks = None
 
         self.bin_data = None
+        self.data = None
         self.parameters = {}
-        self.wavenumbers = {}
-        self.data = {}
         self.metadata = None
 
     def parse(self):
         """Parse the Opus file"""
-        opus_logger.debug('Beginning parsing...')
+        opus_logger.info('Beginning parsing...')
         self._validate_file()
 
+        opus_logger.debug(f'Reading file {self.path}')
         with open(self.path, 'rb') as f:
             self.bin_data = f.read()
 
+        opus_logger.debug('Parsing header')
         self.header = OpusHeader(self.bin_data[:504])
         block_list = self.header.parse()
+
+        opus_logger.debug('Creating blocks')
         blocks = [self._make_block(**block) for block in block_list]
-        self.parameter_blocks = [block for block in blocks if isinstance(block, OpusParameterBlock)]
-        self.data_blocks = [block for block in blocks if isinstance(block, OpusDataBlock)]
-        self.misc_blocks = [block for block in blocks if not isinstance(block, (OpusParameterBlock, OpusDataBlock))]
+        self.parameter_blocks = [block for block in blocks if block.block_type[:2] in parameter_block_types.keys()]
+        self.data_blocks = [block for block in blocks if block.block_type[:2] in data_block_types.keys()]
+        self.misc_blocks = [block for block in blocks if block.block_type in misc_blocks.keys()]
 
-        for block in self.parameter_blocks:
-            param_name = parameter_block_types[block.type]
-            if param_name == "{Channel} Parameters":
-                param_name = param_name.format(Channel=block_channels[block.channel])
+        self._get_acquisition_mode()
 
-            self.parameters[param_name] = block.parse()
+        self._get_parameters()
 
+        self._get_data()
+
+    def _get_data(self):
+        opus_logger.info('Parsing data blocks')
         for block in self.data_blocks:
-            data_name = block_channels[block.channel]
-            num_points = self.parameters[data_name + " Parameters"]["NPT"]
-            first_wn = self.parameters[data_name + " Parameters"]["FXV"]
-            last_wn = self.parameters[data_name + " Parameters"]["LXV"]
-            self.wavenumbers[data_name], self.data[data_name] = block.parse(num_points, first_wn, last_wn)
+            if self.acquisition_mode == "raman-single" and block.block_type == (15, 40, 0):
+                data_parameters = self.parameters["Raman Parameters"]
+                num_points = data_parameters["NPT"]
+                first_wn = data_parameters["FXV"]
+                last_wn = data_parameters["LXV"]
+                self.data = block.parse(num_points, first_wn, last_wn)
+
+            if self.acquisition_mode == "raman-multi" and block.block_type == (15, 40, 80):
+                data_parameters = self.parameters["Raman Parameters"]
+                num_points = data_parameters["NPT"]
+                first_wn = data_parameters["FXV"]
+                last_wn = data_parameters["LXV"]
+                self.data = block.parse(num_points, first_wn, last_wn)
+
+    def _get_parameters(self):
+        opus_logger.info('Parsing parameter blocks')
+        for block in self.parameter_blocks:
+            param_name = parameter_block_types[block.block_type[:2]]
+            params = block.parse()
+
+            if param_name in self.parameters.keys():
+                if self.parameters[param_name] == params:
+                    opus_logger.info(f'Found duplicate parameter block: {param_name}, skipping...')
+                    continue
+                else:
+                    opus_logger.warning(f'Found conflicting parameter blocks: {param_name}, overwriting...')
+            self.parameters[param_name] = params
 
     def _validate_file(self):
         """Make sure the file exists, and has a valid Opus file extension"""
@@ -94,42 +123,76 @@ class OpusFile:
         if not self.path.is_file():
             e = f'Path {self.path} is not a file'
             opus_logger.error(e)
-            raise NotADirectoryError(e)
+            raise IsADirectoryError(e)
         if not re.match(r"\.\d+$", self.path.suffix):
             e = f"File {self.path} does not have a valid Opus file extension"
             opus_logger.error(e)
             raise ValueError(e)
 
+        opus_logger.debug('Validation complete')
+        return True
+
     def _make_block(self,
                     offset: int,
                     length: int,
-                    block_type: int,
-                    block_channel: int,
-                    block_text: int) -> 'OpusBlock':
-        if block_type in data_block_types.keys():
+                    block_type: tuple[int, int, int]) -> Union['OpusBlock', None]:
+
+        if block_type[:2] in data_block_types.keys():
+            opus_logger.debug(f'Found data block: {block_type}')
             return OpusDataBlock(offset,
                                  length,
-                                 block_type,
-                                 block_channel,
-                                 block_text).read_data(self.bin_data)
-        elif block_type in parameter_block_types.keys():
+                                 block_type).read_data(self.bin_data)
+        elif block_type[:2] in parameter_block_types.keys():
+            opus_logger.debug(f'Found parameter block: {block_type}')
             return OpusParameterBlock(offset,
                                       length,
-                                      block_type,
-                                      block_channel,
-                                      block_text).read_data(self.bin_data)
+                                      block_type).read_data(self.bin_data)
         else:
+            opus_logger.debug(f'Found misc block: {block_type}')
             block = OpusBlock(offset,
                               length,
-                              block_type,
-                              block_channel,
-                              block_text).read_data(self.bin_data)
-            opus_logger.warning(f'Unknown block type: {block_type}')
-            opus_logger.debug(block)
+                              block_type).read_data(self.bin_data)
+            if block_type not in misc_blocks.keys() and block_type[0] not in unused_blocks:
+                opus_logger.debug(f'Unknown block type: {block_type}')
+                opus_logger.debug(block)
             return block
 
+    def _get_acquisition_mode(self):
+        for block in self.parameter_blocks:
+            if block.block_type == (48, 0, 0):
+                block.parse()
+                acq_mode = block.parameters['AQM']
+
+                if acq_mode == "RA":
+                    opus_logger.info('Found Raman acquisition mode')
+                    if any([block.block_type == (31, 40, 0) for block in self.parameter_blocks]):
+                        self.acquisition_mode = "raman-single"
+                        opus_logger.info('Found single spectrum file')
+                    elif any([block.block_type == (31, 40, 80) for block in self.parameter_blocks]):
+                        self.acquisition_mode = "raman-multi"
+                        opus_logger.info('Found multiple spectra file')
+
+                else:
+                    e = f'Unknown acquisition mode: {acq_mode}'
+                    opus_logger.error(e)
+                    raise ValueError(e)
+
     def parse_metadata(self):
-        pass
+        self.metadata = {
+            "path":             self.path,
+            "acquisition_mode": self.acquisition_mode,
+            "source":           self.parameters["Optics Parameters"]["SRC"],
+            "power":            self.parameters["Instrument Parameters"]["RLP"],
+            "aperture":         self.parameters["Optics Parameters"]["APT"],
+            "grating":          self.parameters["Optics Parameters"]["GRN"] or
+                                self.parameters["Optics Parameters"]["GRA"],
+            "integration time": self.parameters["Acquisition Parameters"]["INT"] or
+                                self.parameters["Acquisition Parameters"]["ITM"] / 1000,
+            "accumulations":    self.parameters["Acquisition Parameters"]["ASS"] or
+                                self.parameters["Acquisition Parameters"]["NSS"],
+            "date":             self.parameters["Raman Parameters"]["DAT"],
+            "time":             self.parameters["Raman Parameters"]["TIM"],
+        }
 
 
 class OpusHeader:
@@ -143,7 +206,7 @@ class OpusHeader:
             raise ValueError(e)
         self.bin_data = header_data
 
-    def parse(self) -> list[dict[str, int]]:
+    def parse(self) -> list[dict]:
         """Parse the header of the Opus file"""
         # Split into 12 byte blocks, ignore first 24 bytes
         blocks = []
@@ -151,11 +214,12 @@ class OpusHeader:
         for block in self.bin_data:
             if block == b'\x00' * 12:  # Skip empty chunks
                 continue
-            blocks.append({"offset":        struct.unpack('<I', block[-4:])[0],
-                           "length":        4 * struct.unpack('<I', block[-8:-4])[0],
-                           "block_type":    struct.unpack('<B', block[0:1])[0],
-                           "block_channel": struct.unpack('<B', block[1:2])[0],
-                           "block_text":    struct.unpack('<B', block[2:3])[0]})
+            blocks.append({
+                "offset":     struct.unpack('<I', block[-4:])[0],
+                "length":     4 * struct.unpack('<I', block[-8:-4])[0],
+                "block_type": struct.unpack('<BBB', block[0:3])
+            })
+        opus_logger.debug(f'Found {len(blocks)} blocks in header')
         return blocks
 
 
@@ -164,14 +228,12 @@ class OpusBlock:
     """Class representing an Opus block, which can be either a parameter or data block"""
     offset: int
     length: int
-    type: int
-    channel: int
-    text: int
-    bin_data: Union[bytes, None] = None
+    block_type: tuple[int, int, int]
+    bin_data: bytes = b""
 
     def __str__(self):
         return self.__class__.__name__ + \
-            f'(offset={self.offset}, length={self.length}, type={self.type}, channel={self.channel}, text={self.text})'
+            f'(offset={self.offset}, length={self.length}, block_type={self.block_type})'
 
     def __repr__(self):
         return self.__str__()
@@ -188,10 +250,8 @@ class OpusParameterBlock(OpusBlock):
     def __init__(self,
                  offset: int,
                  length: int,
-                 block_type: int,
-                 block_channel: int,
-                 block_text: int) -> None:
-        super().__init__(offset, length, block_type, block_channel, block_text)
+                 block_type: tuple[int, int, int]) -> None:
+        super().__init__(offset, length, block_type)
         self.parameters = {}
 
     def parse(self) -> dict[str, Any]:
@@ -222,44 +282,58 @@ class OpusDataBlock(OpusBlock):
     def __init__(self,
                  offset: int,
                  length: int,
-                 block_type: int,
-                 block_channel: int,
-                 block_text: int) -> None:
-        super().__init__(offset, length, block_type, block_channel, block_text)
-        self.data: Union[np.ndarray, None] = None
+                 block_type: tuple[int, int, int]) -> None:
+        super().__init__(offset, length, block_type)
 
     def parse(self,
               num_points: int,
               first_wn: float,
-              last_wn: float) -> tuple[np.ndarray, np.ndarray]:
+              last_wn: float) -> pd.DataFrame:
         """Parse the data block"""
         opus_logger.debug('Reading data block')
 
         wavenumbers = np.linspace(first_wn, last_wn, num_points)
 
-        if len(self.bin_data) > (num_points + 1) * 4:
-            opus_logger.debug('Found multiple spectra in file')
-            # TODO: Implement multiple spectra files
-            e = 'Multiple spectra files are not yet supported'
-            opus_logger.error(e)
-            raise NotImplementedError(e)
-        else:
+        if self.block_type[2] == 0:
             opus_logger.debug('Found single spectrum in file')
 
             data_bin = self.bin_data[:4 * num_points]
-            self.data = np.asarray(struct.unpack('<' + 'f' * num_points, data_bin)).reshape(1, -1)
+            data = np.asarray(struct.unpack('<' + 'f' * num_points, data_bin)).reshape(1, -1)
 
-        return wavenumbers, self.data
+        elif self.block_type[2] == 80:
+            opus_logger.debug('Found multiple spectra in file')
+            header = struct.unpack('<' + 'I' * 4, self.bin_data[4:20])
+
+            data = []
+            ix = header[1]
+            i = 0
+
+            while i < header[0]:
+                tmp_bin_data = self.bin_data[ix:ix + header[2]]
+                data.append(np.asarray(struct.unpack('<' + 'f' * num_points, tmp_bin_data)))
+                ix += header[2] + header[3]
+                i += 1
+
+            data = np.stack(data)
+
+        else:
+            e = f'Invalid data block type: {self.block_type}'
+            opus_logger.error(e)
+            raise ValueError(e)
+
+        data = pd.DataFrame(data, columns=wavenumbers)
+        return data
 
 
 if __name__ == '__main__':
+    from pprint import pprint
     opus_logger.setLevel(logging.DEBUG)
 
     fh = logging.FileHandler('../opus_converter.log')
     fh.setLevel(logging.DEBUG)
 
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
+    ch.setLevel(logging.DEBUG)
 
     log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     fh.setFormatter(log_formatter)
@@ -268,7 +342,7 @@ if __name__ == '__main__':
     opus_logger.addHandler(fh)
     opus_logger.addHandler(ch)
 
-    parser = OpusParser.from_dir('../data/', metadata=False, recursive=False)
-    # parser = OpusParser("/home/daniel/opus-converter/data/230329_NP_fumarat.4")
-    parser.parse()
-    parser.export_data('../out/')
+    opusfile = OpusFile("../test_files/test_raman.0")
+    opusfile.parse()
+    pprint(opusfile.parameters)
+    print(opusfile.data)

@@ -1,16 +1,53 @@
-import os
-from opus_parser import OpusParser
+import unittest
+from opus_parser.parser import OpusFile, OpusHeader
+from pathlib import Path
 
-files = sorted(os.listdir("./data"))
 
-print(files)
-try:
-    parser = OpusParser.from_dir("./data/", metadata=True)
-    parser.parse()
-except AttributeError:
-    print("Parsing failed")
-else:
-    print(f"Loaded {len(parser.metadata)} OPUS files with {parser.data.shape[-1]} wavenumber points, "
-          f"ranging from {parser.data.columns[0]} to {parser.data.columns[-1]}.")
-    print("Metadata:")
-    print(parser.metadata.columns)
+class TestOpusHeader(unittest.TestCase):
+    def test_output_length(self):
+        with open("test_files/test_raman_single.0", "rb") as f:
+            header_to_test = f.read(504)
+        header = OpusHeader(header_to_test)
+        block_list = header.parse()
+        self.assertEqual(len(block_list), 20)
+
+    def test_bad_input(self):
+        with self.assertRaises(ValueError):
+            OpusHeader(b"1234567890")
+
+    def test_output_keys(self):
+        with open("test_files/test_raman_single.0", "rb") as f:
+            header_to_test = f.read(504)
+        header = OpusHeader(header_to_test)
+        block_list = header.parse()
+        self.assertEqual(list(block_list[0].keys()),
+                         ["offset",
+                          "length",
+                          "block_type"])
+
+
+class TestFileValidation(unittest.TestCase):
+    def test_validation_success(self):
+        for file in Path("./test_files").glob("*.0"):
+            with self.subTest(file=file):
+                self.assertTrue(OpusFile(file)._validate_file())
+
+    def test_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            OpusFile("./test_files/nonexistent.0")._validate_file()
+
+    def test_directory(self):
+        with self.assertRaises(IsADirectoryError):
+            OpusFile("./test_files")._validate_file()
+
+    def test_bad_file_format(self):
+        with self.assertRaises(ValueError):
+            OpusFile("./test_files/textfile.txt")._validate_file()
+
+
+class TestOpusFile(unittest.TestCase):
+    
+
+
+if __name__ == '__main__':
+    unittest.main()

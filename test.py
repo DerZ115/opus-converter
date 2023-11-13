@@ -1,5 +1,6 @@
 import unittest
-from opus_parser.parser import OpusFile, OpusHeader
+from opus_parser.parser import OpusFile
+from opus_parser.blocks import OpusHeader
 from pathlib import Path
 
 
@@ -46,7 +47,7 @@ class TestFileValidation(unittest.TestCase):
 
 
 class TestOpusFile(unittest.TestCase):
-    
+    pass
 
 
 if __name__ == '__main__':

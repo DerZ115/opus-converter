@@ -1,5 +1,5 @@
-import struct
 import logging
+import struct
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +13,41 @@ field_types = {
     (0, 4): '<I',
     (1, 4): '<f',
     (1, 8): '<d'
+}
+
+# parameter_block_types = {
+#     (16, 28): "Trace Parameters",
+#     (31, 40): "Raman Parameters",
+#     (32, 0):  "Instrument Parameters",
+#     (48, 0):  "Acquisition Parameters",
+#     (64, 0):  "FT Parameters",
+#     (96, 0):  "Optics Parameters",
+#     (160, 0): "Sample Parameters",
+# }
+
+metadata_block_types = {
+    32:  "Instrument Parameters",
+    48:  "Acquisition Parameters",
+    64:  "FT Parameters",
+    96:  "Optics Parameters",
+    160: "Sample Parameters",
+}
+
+data_block_types = {
+    "raman": (15, 40),
+}
+
+misc_blocks = {
+    (0, 52, 0):  "Header",
+    (0, 0, 160): "Unknown",
+    (0, 0, 88):  "Unknown",
+    (0, 0, 104): "Info",
+}
+
+acquisition_modes = ["raman"]
+
+measurement_block_types = {
+    "raman": (31, 40),
 }
 
 
